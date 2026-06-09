@@ -7329,37 +7329,45 @@ document.addEventListener('contextmenu', e => e.preventDefault());
     generating = true;
     if (typeof AudioMgr !== 'undefined') AudioMgr.shutter();
 
-    const btn  = document.getElementById('generatePosterBtn');
-    const hint = document.getElementById('generatingHint');
+    var btn  = document.getElementById('generatePosterBtn');
+    var hint = document.getElementById('generatingHint');
     if (btn)  { btn.disabled = true; btn.innerHTML = '⏳ 生成中…'; }
     if (hint) hint.style.display = 'block';
 
     loadH2C(function() {
-      const area = document.getElementById('posterCaptureArea');
+      var area = document.getElementById('posterCaptureArea');
       if (!area) { resetBtn(); return; }
 
-      /* ── Step 1：停止卡片入场动画，冻结当前状态 ── */
+      /* ── 停止入场动画 ── */
       var origAnim = area.style.animation;
       area.style.animation = 'none';
 
-      /* ── Step 2：隐藏编辑按钮 ── */
+      /* ── 隐藏编辑按钮 ── */
       var editBtn   = document.getElementById('editNameBtn');
       var origVisib = editBtn ? editBtn.style.visibility : '';
       if (editBtn) editBtn.style.visibility = 'hidden';
 
-      /* ── Step 3：读取真实渲染尺寸 ── */
+      /* ── 读取真实尺寸 ── */
       var rect = area.getBoundingClientRect();
-      var W    = Math.round(rect.width)  || 280;
-      var H    = Math.round(rect.height) || 400;
+      var W = Math.round(rect.width)  || 280;
+      var H = Math.round(rect.height) || 400;
 
-      /* ── Step 4：克隆到 body，放在屏幕左侧刚好不可见位置 ── */
+      /* ── 黑色遮罩：挡住用户视线（安卓方案核心）── */
+      var mask = document.createElement('div');
+      mask.setAttribute('style',
+        'position:fixed;inset:0;background:#000;z-index:19998;pointer-events:none;'
+      );
+      document.body.appendChild(mask);
+
+      /* ── Clone 放在屏幕内正中，让安卓 GPU 完整光栅化 ── */
       var clone = area.cloneNode(true);
       clone.id  = '__h2c_clone__';
-      /* 关键：不用 top:-9999，改用 left 移出屏幕 */
+      var cloneLeft = Math.round((window.innerWidth  - W) / 2);
+      var cloneTop  = Math.round((window.innerHeight - H) / 2);
       clone.setAttribute('style',
         'position:fixed!important;' +
-        'top:0!important;' +
-        'left:-' + (W + 20) + 'px!important;' +
+        'top:'  + cloneTop  + 'px!important;' +
+        'left:' + cloneLeft + 'px!important;' +
         'width:' + W + 'px!important;' +
         'height:' + H + 'px!important;' +
         'transform:none!important;' +
@@ -7367,53 +7375,73 @@ document.addEventListener('contextmenu', e => e.preventDefault());
         'opacity:1!important;' +
         'visibility:visible!important;' +
         'overflow:hidden!important;' +
-        'background:linear-gradient(148deg,#F6EFE5 0%,#EDE4D0 55%,#E5D8C0 100%)!important;' +
-        'z-index:9999!important;' +
+        'border-radius:5px 20px 18px 4px!important;' +
+        'background:#EDE4D0!important;' +
+        'z-index:19999!important;' +
         'pointer-events:none!important;'
       );
-      /* 克隆内：停动画、隐编辑按钮 */
-      var els = clone.querySelectorAll('*');
-      els.forEach(function(el) { el.style.animation = 'none'; });
+      /* 克隆内清理 */
+      clone.querySelectorAll('*').forEach(function(el) {
+        el.style.animation = 'none';
+        /* 清除可能导致安卓渲染问题的属性 */
+        el.style.willChange = 'auto';
+        el.style.backdropFilter = 'none';
+        el.style.webkitBackdropFilter = 'none';
+      });
       var cEdit = clone.querySelector('#editNameBtn');
       if (cEdit) cEdit.style.display = 'none';
       document.body.appendChild(clone);
 
-      /* ── Step 5：等字体+布局稳定后截图（400ms 更保险）── */
+      var cleanup = function() {
+        if (clone.parentNode) clone.parentNode.removeChild(clone);
+        if (mask.parentNode)  mask.parentNode.removeChild(mask);
+        area.style.animation = origAnim;
+        if (editBtn) editBtn.style.visibility = origVisib;
+        resetBtn();
+      };
+
       var doCapture = function() {
-        var captureW = clone.offsetWidth  || W;
-        var captureH = clone.offsetHeight || H;
+        var cW = clone.offsetWidth  || W;
+        var cH = clone.offsetHeight || H;
 
         window.html2canvas(clone, {
           useCORS:               true,
           scale:                 2,
-          backgroundColor:       '#F0E8D8',
+          backgroundColor:       '#EDE4D0',
           logging:               false,
           allowTaint:            true,
           foreignObjectRendering:false,
+          imageTimeout:          8000,
           x: 0, y: 0,
-          width:       captureW,
-          height:      captureH,
+          width:       cW,
+          height:      cH,
           scrollX:     0,
           scrollY:     0,
-          windowWidth:  captureW,
-          windowHeight: captureH,
+          windowWidth:  window.innerWidth,
+          windowHeight: window.innerHeight,
           onclone: function(doc) {
             var el = doc.getElementById('__h2c_clone__');
-            if (el) {
-              el.style.cssText = el.style.cssText +
-                ';background:linear-gradient(148deg,#F6EFE5 0%,#EDE4D0 55%,#E5D8C0 100%)!important' +
-                ';opacity:1!important;visibility:visible!important';
-              /* 确保引流文字可见 */
-              var ft = el.querySelector('.share-footer-text');
-              if (ft) { ft.style.opacity='0.75'; ft.style.display='block'; }
-              /* QR 图也强制可见 */
-              var qr = el.querySelector('.qr-zone');
-              if (qr) { qr.style.opacity='1'; qr.style.display='flex'; }
-            }
+            if (!el) return;
+            /* 安卓：用纯色背景替代渐变，防止渐变渲染失败 */
+            el.style.background = '#EDE4D0';
+            el.style.opacity    = '1';
+            el.style.visibility = 'visible';
+            /* 所有子元素：清除 CSS 变量引用、will-change */
+            el.querySelectorAll('*').forEach(function(c) {
+              c.style.animation       = 'none';
+              c.style.willChange      = 'auto';
+              c.style.backdropFilter  = 'none';
+              c.style.webkitBackdropFilter = 'none';
+            });
+            /* 引流文字 & QR */
+            var ft = el.querySelector('.share-footer-text');
+            if (ft) { ft.style.opacity='0.75'; ft.style.display='block'; }
+            var qr = el.querySelector('.qr-zone');
+            if (qr) { qr.style.opacity='1'; qr.style.display='flex'; }
           }
         }).then(function(canvas) {
           cleanup();
-          showPopup(canvas.toDataURL('image/jpeg', 0.95));
+          showPopup(canvas.toDataURL('image/jpeg', 0.92));
         }).catch(function(err) {
           cleanup();
           console.error('[poster]', err);
@@ -7421,20 +7449,16 @@ document.addEventListener('contextmenu', e => e.preventDefault());
         });
       };
 
-      var cleanup = function() {
-        if (clone.parentNode) clone.parentNode.removeChild(clone);
-        area.style.animation = origAnim;
-        if (editBtn) editBtn.style.visibility = origVisib;
-        resetBtn();
+      /* 等字体 + 两帧渲染后截图 */
+      var waitAndCapture = function() {
+        /* 安卓需要更长等待（500ms）*/
+        setTimeout(doCapture, 500);
       };
 
-      /* 等待字体加载 */
       if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(function() {
-          setTimeout(doCapture, 400);
-        });
+        document.fonts.ready.then(waitAndCapture);
       } else {
-        setTimeout(doCapture, 500);
+        setTimeout(waitAndCapture, 100);
       }
     });
   }
