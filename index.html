@@ -7326,90 +7326,116 @@ document.addEventListener('contextmenu', e => e.preventDefault());
   /* ══ 生成海报主流程 ══════════════════════ */
   function generatePoster() {
     if (generating) return;
-    if(window.playSound) AudioMgr.click();
     generating = true;
+    if (typeof AudioMgr !== 'undefined') AudioMgr.shutter();
 
     const btn  = document.getElementById('generatePosterBtn');
     const hint = document.getElementById('generatingHint');
     if (btn)  { btn.disabled = true; btn.innerHTML = '⏳ 生成中…'; }
     if (hint) hint.style.display = 'block';
 
-    if (typeof AudioMgr !== 'undefined') AudioMgr.shutter();
-    loadH2C(() => {
+    loadH2C(function() {
       const area = document.getElementById('posterCaptureArea');
       if (!area) { resetBtn(); return; }
 
-      /* 截图前临时隐藏编辑按钮 */
-      const editBtn   = document.getElementById('editNameBtn');
-      const origVisib = editBtn ? editBtn.style.visibility : '';
+      /* ── Step 1：停止卡片入场动画，冻结当前状态 ── */
+      var origAnim = area.style.animation;
+      area.style.animation = 'none';
+
+      /* ── Step 2：隐藏编辑按钮 ── */
+      var editBtn   = document.getElementById('editNameBtn');
+      var origVisib = editBtn ? editBtn.style.visibility : '';
       if (editBtn) editBtn.style.visibility = 'hidden';
 
-      /* ══════════════════════════════════════════════
-         根治空白海报的三个关键修复：
-         1. 把卡片 clone 到 body 最外层（脱离 transform 父元素）
-         2. 强制设置实色背景（不能用 null）
-         3. 等待字体渲染完成后再截图
-      ══════════════════════════════════════════════ */
+      /* ── Step 3：读取真实渲染尺寸 ── */
+      var rect = area.getBoundingClientRect();
+      var W    = Math.round(rect.width)  || 280;
+      var H    = Math.round(rect.height) || 400;
 
-      /* 克隆节点到 body，脱离 .screen 的 transform 上下文 */
-      const clone = area.cloneNode(true);
-      clone.id    = '__posterClone__';
-      clone.style.cssText = `
-        position: fixed !important;
-        top: -9999px !important;
-        left: 0 !important;
-        width: ${area.offsetWidth}px !important;
-        height: auto !important;
-        transform: none !important;
-        z-index: -1 !important;
-        opacity: 1 !important;
-        pointer-events: none !important;
-        background: #F2E8DC !important;
-        overflow: visible !important;
-        font-family: 'ZCOOL XiaoWei', serif;
-      `;
-      /* 隐藏克隆里的编辑按钮 */
-      const cloneEditBtn = clone.querySelector('#editNameBtn');
-      if (cloneEditBtn) cloneEditBtn.style.visibility = 'hidden';
+      /* ── Step 4：克隆到 body，放在屏幕左侧刚好不可见位置 ── */
+      var clone = area.cloneNode(true);
+      clone.id  = '__h2c_clone__';
+      /* 关键：不用 top:-9999，改用 left 移出屏幕 */
+      clone.setAttribute('style',
+        'position:fixed!important;' +
+        'top:0!important;' +
+        'left:-' + (W + 20) + 'px!important;' +
+        'width:' + W + 'px!important;' +
+        'height:' + H + 'px!important;' +
+        'transform:none!important;' +
+        'animation:none!important;' +
+        'opacity:1!important;' +
+        'visibility:visible!important;' +
+        'overflow:hidden!important;' +
+        'background:linear-gradient(148deg,#F6EFE5 0%,#EDE4D0 55%,#E5D8C0 100%)!important;' +
+        'z-index:9999!important;' +
+        'pointer-events:none!important;'
+      );
+      /* 克隆内：停动画、隐编辑按钮 */
+      var els = clone.querySelectorAll('*');
+      els.forEach(function(el) { el.style.animation = 'none'; });
+      var cEdit = clone.querySelector('#editNameBtn');
+      if (cEdit) cEdit.style.display = 'none';
       document.body.appendChild(clone);
 
-      /* 等一帧让浏览器完成布局和字体渲染 */
-      setTimeout(() => {
+      /* ── Step 5：等字体+布局稳定后截图（400ms 更保险）── */
+      var doCapture = function() {
+        var captureW = clone.offsetWidth  || W;
+        var captureH = clone.offsetHeight || H;
+
         window.html2canvas(clone, {
           useCORS:               true,
           scale:                 2,
-          backgroundColor:       '#F2E8DC',   /* ← 实色背景，不能用 null */
+          backgroundColor:       '#F0E8D8',
           logging:               false,
           allowTaint:            true,
           foreignObjectRendering:false,
-          width:  clone.scrollWidth,
-          height: clone.scrollHeight,
-          windowWidth:  window.innerWidth,
-          windowHeight: window.innerHeight,
-          onclone: (doc) => {
-            /* 在克隆文档里确保可见性 */
-            const el = doc.getElementById('__posterClone__') ||
-                       doc.querySelector('[id="__posterClone__"]');
+          x: 0, y: 0,
+          width:       captureW,
+          height:      captureH,
+          scrollX:     0,
+          scrollY:     0,
+          windowWidth:  captureW,
+          windowHeight: captureH,
+          onclone: function(doc) {
+            var el = doc.getElementById('__h2c_clone__');
             if (el) {
-              el.style.background   = '#F2E8DC';
-              el.style.opacity      = '1';
-              el.style.visibility   = 'visible';
+              el.style.cssText = el.style.cssText +
+                ';background:linear-gradient(148deg,#F6EFE5 0%,#EDE4D0 55%,#E5D8C0 100%)!important' +
+                ';opacity:1!important;visibility:visible!important';
+              /* 确保引流文字可见 */
+              var ft = el.querySelector('.share-footer-text');
+              if (ft) { ft.style.opacity='0.75'; ft.style.display='block'; }
+              /* QR 图也强制可见 */
+              var qr = el.querySelector('.qr-zone');
+              if (qr) { qr.style.opacity='1'; qr.style.display='flex'; }
             }
           }
-        }).then(canvas => {
-          /* 清理临时克隆 */
-          if (clone.parentNode) clone.parentNode.removeChild(clone);
-          if (editBtn) editBtn.style.visibility = origVisib;
-          resetBtn();
-          showPopup(canvas.toDataURL('image/png'));
-        }).catch(err => {
-          if (clone.parentNode) clone.parentNode.removeChild(clone);
-          if (editBtn) editBtn.style.visibility = origVisib;
-          console.error('[s7]', err);
-          resetBtn();
-          alert('😅 截图遇到问题，请重试。');
+        }).then(function(canvas) {
+          cleanup();
+          showPopup(canvas.toDataURL('image/jpeg', 0.95));
+        }).catch(function(err) {
+          cleanup();
+          console.error('[poster]', err);
+          alert('😅 生成失败，请重试');
         });
-      }, 200);
+      };
+
+      var cleanup = function() {
+        if (clone.parentNode) clone.parentNode.removeChild(clone);
+        area.style.animation = origAnim;
+        if (editBtn) editBtn.style.visibility = origVisib;
+        resetBtn();
+      };
+
+      /* 等待字体加载 */
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function() {
+          setTimeout(doCapture, 400);
+        });
+      } else {
+        setTimeout(doCapture, 500);
+      }
     });
   }
 
